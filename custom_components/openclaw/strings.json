@@ -12,7 +12,7 @@
         "data_description": {
           "gateway_url": "WebSocket URL of your OpenClaw gateway — e.g. ws://192.168.1.50:18789",
           "token": "Auth token from your gateway config (gateway.auth.token). Leave blank if auth is disabled.",
-          "session_key": "The OpenClaw session key that Home Assistant should talk to (visible in the Control UI)"
+          "session_key": "Leave blank to auto-create a dedicated 'homeassistant' session, or paste a session key from the OpenClaw Control UI"
         }
       },
       "reconfigure": {

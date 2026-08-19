@@ -108,6 +108,44 @@ class OpenClawGateway:
         await self._call("watch.subscribe", {})
         LOGGER.debug("Connected to OpenClaw gateway at %s", self._url)
 
+    async def ensure_session(self, session_key: str = "") -> str:
+        """Return session_key as-is if provided, or create/reuse a 'homeassistant' session.
+
+        When no session key is configured, we look for an existing session whose
+        key starts with 'homeassistant' and reuse it, or create a new one.
+        """
+        if session_key:
+            return session_key
+
+        default_key = "homeassistant"
+
+        try:
+            result = await self._call("chats.list", {})
+            chats = result.get("chats") or result.get("items") or []
+            for chat in chats:
+                key = chat.get("sessionKey") or chat.get("key") or ""
+                if key.startswith(default_key):
+                    LOGGER.debug("Reusing existing OpenClaw session: %s", key)
+                    return key
+        except OpenClawError:
+            pass
+
+        # No existing session found — create one
+        try:
+            result = await self._call(
+                "sessions.create",
+                {"key": default_key, "title": "Home Assistant"},
+            )
+            key = result.get("sessionKey") or result.get("key") or default_key
+            LOGGER.debug("Created new OpenClaw session: %s", key)
+            return key
+        except OpenClawError:
+            # Fall back to the plain key and let chat.send handle it
+            LOGGER.warning(
+                "Could not create session — using key '%s' directly", default_key
+            )
+            return default_key
+
     async def disconnect(self) -> None:
         """Disconnect from the gateway."""
         if self._listen_task:

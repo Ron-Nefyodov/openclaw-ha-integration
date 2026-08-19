@@ -60,7 +60,6 @@ class OpenClawConversationEntity(
     ) -> conversation.ConversationResult:
         """Forward the user message to OpenClaw and return the response."""
         options = self.entry.options
-        session_key = options.get(CONF_SESSION_KEY, "")
         system_prompt = options.get(CONF_SYSTEM_PROMPT, "")
 
         text = user_input.text
@@ -68,6 +67,9 @@ class OpenClawConversationEntity(
             text = f"{system_prompt}\n\n{text}"
 
         gateway = self.entry.runtime_data
+
+        # Resolve session — uses configured key or auto-creates a 'homeassistant' session
+        session_key = await gateway.ensure_session(options.get(CONF_SESSION_KEY, ""))
 
         try:
             response_text = await gateway.send_message(session_key=session_key, text=text)

@@ -45,7 +45,7 @@ def _connection_schema(
         {
             vol.Required(CONF_GATEWAY_URL, default=default_url): str,
             vol.Optional(CONF_TOKEN, default=default_token): str,
-            vol.Required(CONF_SESSION_KEY, default=default_session_key): str,
+            vol.Optional(CONF_SESSION_KEY, default=default_session_key): str,
         }
     )
 
