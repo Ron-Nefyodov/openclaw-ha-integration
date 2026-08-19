@@ -3,26 +3,41 @@
     "step": {
       "user": {
         "title": "Connect to OpenClaw",
-        "description": "Enter your OpenClaw gateway details. The gateway runs locally at ws://127.0.0.1:18789 by default. Find your session key in the OpenClaw Control UI.",
+        "description": "Enter your OpenClaw gateway details. Run `openclaw gateway status` to find the address and token.",
         "data": {
           "gateway_url": "Gateway URL",
-          "token": "Auth token (leave blank if not set)",
+          "token": "Auth token",
           "session_key": "Session key"
         },
         "data_description": {
-          "gateway_url": "WebSocket URL of your OpenClaw gateway (e.g. ws://127.0.0.1:18789)",
-          "token": "Auth token configured in your gateway settings (gateway.auth.token)",
-          "session_key": "The OpenClaw session that Home Assistant should talk to"
+          "gateway_url": "WebSocket URL of your OpenClaw gateway — e.g. ws://192.168.1.50:18789",
+          "token": "Auth token from your gateway config (gateway.auth.token). Leave blank if auth is disabled.",
+          "session_key": "The OpenClaw session key that Home Assistant should talk to (visible in the Control UI)"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure OpenClaw connection",
+        "description": "Update the gateway URL, auth token, or session key.",
+        "data": {
+          "gateway_url": "Gateway URL",
+          "token": "Auth token",
+          "session_key": "Session key"
+        },
+        "data_description": {
+          "gateway_url": "WebSocket URL of your OpenClaw gateway — e.g. ws://192.168.1.50:18789",
+          "token": "Auth token from your gateway config. Leave blank if auth is disabled.",
+          "session_key": "The OpenClaw session key that Home Assistant should talk to"
         }
       }
     },
     "error": {
-      "cannot_connect": "Cannot connect to OpenClaw gateway — is it running?",
+      "cannot_connect": "Cannot connect to the OpenClaw gateway — check the URL and make sure OpenClaw is running",
       "invalid_auth": "Invalid auth token",
       "unknown": "Unexpected error"
     },
     "abort": {
-      "already_configured": "This OpenClaw gateway is already configured"
+      "already_configured": "This OpenClaw gateway is already configured",
+      "reconfigure_successful": "Gateway connection updated successfully"
     }
   },
   "options": {
@@ -34,7 +49,7 @@
           "system_prompt": "System prompt prefix (optional)"
         },
         "data_description": {
-          "session_key": "The OpenClaw session key to route messages to",
+          "session_key": "The OpenClaw session key to route messages to. Change this to switch sessions without reconnecting.",
           "system_prompt": "Text prepended to every message sent to OpenClaw. Leave blank to send the user message as-is."
         }
       }

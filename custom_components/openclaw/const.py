@@ -10,7 +10,7 @@ CONF_TOKEN = "token"
 CONF_SESSION_KEY = "session_key"
 CONF_SYSTEM_PROMPT = "system_prompt"
 
-DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789"
+DEFAULT_GATEWAY_URL = ""  # User must supply the gateway IP (e.g. ws://192.168.1.x:18789)
 DEFAULT_CONVERSATION_NAME = "OpenClaw"
 
 GATEWAY_PROTOCOL_VERSION = 4

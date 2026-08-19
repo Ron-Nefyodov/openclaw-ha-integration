@@ -203,7 +203,13 @@ class OpenClawGateway:
         return remove
 
     async def send_message(self, session_key: str, text: str) -> str:
-        """Send a chat message and wait for the assistant's response."""
+        """Send a chat message and wait for the assistant's cumulative response.
+
+        OpenClaw protocol v4 sends two kinds of updates:
+        - `chat` events with deltaText (streaming chunks) — ignored here
+        - `session.message` events with a cumulative `message` snapshot once the
+          run completes — this is what we resolve on.
+        """
         loop = asyncio.get_event_loop()
         response_future: asyncio.Future[str] = loop.create_future()
 
@@ -213,9 +219,14 @@ class OpenClawGateway:
                 frame.get("event") == "session.message"
                 and payload.get("sessionKey") == session_key
                 and payload.get("role") == "assistant"
+                # `message` is the cumulative snapshot; fall back to `text` for
+                # older gateway versions that used that field name.
+                and ("message" in payload or "text" in payload)
                 and not response_future.done()
             ):
-                response_future.set_result(payload.get("text", ""))
+                response_future.set_result(
+                    payload.get("message") or payload.get("text", "")
+                )
 
         # Register listener BEFORE sending to avoid race conditions
         remove = self.add_event_listener(on_event)
