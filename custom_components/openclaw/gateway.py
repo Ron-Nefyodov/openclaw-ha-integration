@@ -12,6 +12,7 @@ import aiohttp
 
 from .const import (
     GATEWAY_CLIENT_ID,
+    GATEWAY_CLIENT_MODE,
     GATEWAY_CLIENT_VERSION,
     GATEWAY_PROTOCOL_VERSION,
     LOGGER,
@@ -89,14 +90,16 @@ class OpenClawGateway:
                     "minProtocol": GATEWAY_PROTOCOL_VERSION,
                     "maxProtocol": GATEWAY_PROTOCOL_VERSION,
                     "client": {
-                        "id": GATEWAY_CLIENT_ID,
+                        # client.id and client.mode are closed enums validated by the gateway.
+                        # "cli" / "cli" is the correct pairing for a non-UI operator client.
+                        "id": GATEWAY_CLIENT_ID,    # "cli"
                         "version": GATEWAY_CLIENT_VERSION,
-                        "platform": "homeassistant",
-                        "mode": "operator",
+                        "platform": "linux",
+                        "mode": GATEWAY_CLIENT_MODE,  # "cli"
                     },
                     "role": "operator",
                     "scopes": ["operator.read", "operator.write"],
-                    "auth": {"token": self._token},
+                    "auth": {"token": self._token} if self._token else None,
                 },
             )
         except OpenClawAuthError:

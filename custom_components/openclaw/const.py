@@ -14,7 +14,10 @@ DEFAULT_GATEWAY_URL = ""  # User must supply the gateway IP (e.g. ws://192.168.1
 DEFAULT_CONVERSATION_NAME = "OpenClaw"
 
 GATEWAY_PROTOCOL_VERSION = 4
-GATEWAY_CLIENT_ID = "ha-openclaw"
+# client.id and client.mode must be values from the gateway's closed enum registries.
+# See packages/gateway-protocol/src/client-info.ts in the OpenClaw source.
+GATEWAY_CLIENT_ID = "cli"       # from GATEWAY_CLIENT_IDS
+GATEWAY_CLIENT_MODE = "cli"     # from GATEWAY_CLIENT_MODES  ("operator" is NOT a valid mode)
 GATEWAY_CLIENT_VERSION = "1.0.0"
 
 # How long to wait for an assistant response before timing out
