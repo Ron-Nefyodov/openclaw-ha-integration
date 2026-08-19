@@ -1,0 +1,13 @@
+{
+  "domain": "claude_conversation",
+  "name": "Claude Conversation",
+  "after_dependencies": ["assist_pipeline", "intent"],
+  "codeowners": ["@ronnefyodov"],
+  "config_flow": true,
+  "dependencies": ["conversation"],
+  "documentation": "https://github.com/ronnefyodov/ha-claude-agent",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "requirements": ["anthropic>=0.62.0"],
+  "version": "1.0.0"
+}
