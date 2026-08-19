@@ -1,0 +1,13 @@
+{
+  "domain": "openclaw",
+  "name": "OpenClaw",
+  "after_dependencies": ["assist_pipeline", "intent"],
+  "codeowners": ["@ronnefyodov"],
+  "config_flow": true,
+  "dependencies": ["conversation"],
+  "documentation": "https://github.com/Ron-Nefyodov/openclaw-ha-integration",
+  "integration_type": "service",
+  "iot_class": "local_push",
+  "requirements": [],
+  "version": "1.0.0"
+}

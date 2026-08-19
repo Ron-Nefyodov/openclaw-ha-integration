@@ -1,0 +1,43 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to OpenClaw",
+        "description": "Enter your OpenClaw gateway details. The gateway runs locally at ws://127.0.0.1:18789 by default. Find your session key in the OpenClaw Control UI.",
+        "data": {
+          "gateway_url": "Gateway URL",
+          "token": "Auth token (leave blank if not set)",
+          "session_key": "Session key"
+        },
+        "data_description": {
+          "gateway_url": "WebSocket URL of your OpenClaw gateway (e.g. ws://127.0.0.1:18789)",
+          "token": "Auth token configured in your gateway settings (gateway.auth.token)",
+          "session_key": "The OpenClaw session that Home Assistant should talk to"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to OpenClaw gateway — is it running?",
+      "invalid_auth": "Invalid auth token",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This OpenClaw gateway is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "OpenClaw options",
+        "data": {
+          "session_key": "Session key",
+          "system_prompt": "System prompt prefix (optional)"
+        },
+        "data_description": {
+          "session_key": "The OpenClaw session key to route messages to",
+          "system_prompt": "Text prepended to every message sent to OpenClaw. Leave blank to send the user message as-is."
+        }
+      }
+    }
+  }
+}
