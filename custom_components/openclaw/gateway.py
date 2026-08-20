@@ -62,14 +62,19 @@ class OpenClawGateway:
         token: str,
         session: aiohttp.ClientSession,
         ssl: bool = False,
-        device_auth: dict[str, Any] | None = None,
+        device_auth_builder: Any | None = None,
     ) -> None:
-        """Initialize the gateway client."""
+        """Initialize the gateway client.
+
+        device_auth_builder: async callable(challenge_payload) -> dict | None
+        Used to sign the connect challenge with an Ed25519 keypair so the
+        gateway grants operator.read / operator.write scopes.
+        """
         scheme = "wss" if ssl else "ws"
         self._url = f"{scheme}://{host}:{port}"
         self._token = token
         self._session = session
-        self._device_auth = device_auth  # Ed25519 device auth dict or None
+        self._device_auth_builder = device_auth_builder
 
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._pending: dict[str, asyncio.Future[Any]] = {}
@@ -175,7 +180,16 @@ class OpenClawGateway:
         except asyncio.TimeoutError:
             LOGGER.debug("No connect.challenge received — proceeding without device auth")
 
-        connect_params = self._build_connect_params(challenge_payload)
+        # Build device auth by signing the challenge (grants operator scopes)
+        device_auth: dict | None = None
+        if challenge_payload and self._device_auth_builder:
+            try:
+                device_auth = await self._device_auth_builder(challenge_payload)
+                LOGGER.debug("Device auth built: %s", device_auth)
+            except Exception as err:
+                LOGGER.warning("Device auth build failed (no scope upgrade): %s", err)
+
+        connect_params = self._build_connect_params(challenge_payload, device_auth)
 
         # Start the real listener BEFORE the connect RPC so it can dispatch the response.
         # Without this, _raw_call's future would never be resolved.
@@ -196,7 +210,9 @@ class OpenClawGateway:
         self._notify_connected()
         LOGGER.info("Connected to OpenClaw gateway at %s", self._url)
 
-    def _build_connect_params(self, challenge: dict | None) -> dict[str, Any]:
+    def _build_connect_params(
+        self, challenge: dict | None, device_auth: dict | None
+    ) -> dict[str, Any]:
         params: dict[str, Any] = {
             "minProtocol": PROTOCOL_MIN_VERSION,
             "maxProtocol": PROTOCOL_MAX_VERSION,
@@ -210,8 +226,8 @@ class OpenClawGateway:
         }
         if self._token:
             params["auth"] = {"token": self._token}
-        if challenge and self._device_auth:
-            params["device"] = self._device_auth
+        if device_auth:
+            params["device"] = device_auth
         return params
 
     # ── Heartbeat ─────────────────────────────────────────────────────────────

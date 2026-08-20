@@ -22,6 +22,7 @@ from .const import (
     SERVICE_RECONNECT,
     SERVICE_SET_SESSION,
 )
+from .device_auth import build_device_auth
 from .gateway import OpenClawAuthError, OpenClawConnectionError, OpenClawGateway
 
 PLATFORMS = (
@@ -45,12 +46,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: OpenClawConfigEntry) -> 
 
     from .const import DEFAULT_PORT
 
+    async def _device_auth_builder(challenge_payload):
+        return await build_device_auth(hass, entry.entry_id, challenge_payload)
+
     gateway = OpenClawGateway(
         host=entry.data[CONF_HOST],
         port=entry.data.get(CONF_PORT, DEFAULT_PORT),
         token=entry.data.get(CONF_TOKEN, ""),
         session=session,
         ssl=entry.data.get(CONF_SSL, False),
+        device_auth_builder=_device_auth_builder,
     )
 
     try:
