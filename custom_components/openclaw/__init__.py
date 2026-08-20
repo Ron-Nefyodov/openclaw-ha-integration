@@ -92,7 +92,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: OpenClawConfigEntry) -> 
         "openclaw device pair list",
         device_id,
     )
-    hass.components.persistent_notification.async_create(
+    from homeassistant.components.persistent_notification import async_create as pn_create
+    pn_create(
+        hass,
         f"OpenClaw needs device pairing to get full access.\n\n"
         f"**Device ID:** `{device_id}`\n\n"
         f"Run on your OpenClaw server:\n"
