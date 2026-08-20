@@ -22,7 +22,7 @@ from .const import (
     SERVICE_RECONNECT,
     SERVICE_SET_SESSION,
 )
-from .device_auth import build_device_auth
+from .device_auth import build_device_auth, get_device_id
 from .gateway import OpenClawAuthError, OpenClawConnectionError, OpenClawGateway
 
 PLATFORMS = (
@@ -45,8 +45,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: OpenClawConfigEntry) -> 
     session = async_get_clientsession(hass)
 
     from .const import DEFAULT_PORT
-
-    device_id = f"openclaw-{entry.entry_id}"
 
     async def _device_auth_builder(challenge_payload):
         return await build_device_auth(hass, entry.entry_id, challenge_payload)
@@ -83,16 +81,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: OpenClawConfigEntry) -> 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
-    # Notify the user if device pairing is needed to obtain operator scopes.
-    # The gateway creates a pending pairing request on connect when it sees
-    # our deviceId+publicKey for the first time; the user must approve it.
+    # Show the device ID and pairing instructions.
+    # The gateway creates a pending pairing request when it first sees our device.
+    from homeassistant.components.persistent_notification import async_create as pn_create
+    device_id = await get_device_id(hass) or "unknown"
     LOGGER.warning(
         "OpenClaw device ID: %s — if you see 'missing scope' errors, "
-        "approve device pairing in your OpenClaw dashboard or run: "
-        "openclaw device pair list",
+        "approve device pairing: openclaw device pair list",
         device_id,
     )
-    from homeassistant.components.persistent_notification import async_create as pn_create
     pn_create(
         hass,
         f"OpenClaw needs device pairing to get full access.\n\n"
