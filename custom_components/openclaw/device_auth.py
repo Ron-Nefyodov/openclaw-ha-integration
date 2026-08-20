@@ -105,11 +105,14 @@ async def build_device_auth(
     device_id = _derive_device_id(public_key)
     public_key_b64 = base64.b64encode(public_key).decode()
 
-    nonce = (challenge_payload or {}).get("challenge") or str(uuid.uuid4())
+    cp = challenge_payload or {}
+    LOGGER.warning("connect.challenge payload: %s", cp)
+    # Gateway may use 'challenge' or 'nonce' as the key name
+    nonce = cp.get("nonce") or cp.get("challenge") or str(uuid.uuid4())
     signed_at = int(datetime.now(timezone.utc).timestamp() * 1000)  # Unix ms
 
-    # Sign nonce + str(signedAt)
-    signature = _sign(private_key, nonce + str(signed_at))
+    # Sign only the nonce — signedAt is metadata, not part of the signed payload
+    signature = _sign(private_key, nonce)
 
     payload: dict[str, Any] = {
         "id": device_id,
