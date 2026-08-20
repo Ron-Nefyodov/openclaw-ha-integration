@@ -224,10 +224,12 @@ class OpenClawGateway:
                 "mode": CLIENT_MODE,
             },
         }
-        if self._token:
-            params["auth"] = {"token": self._token}
         if device_auth:
+            # Device auth takes precedence — sending both token+device causes
+            # the gateway to use the token path and skip the pairing flow.
             params["device"] = device_auth
+        elif self._token:
+            params["auth"] = {"token": self._token}
         return params
 
     # ── Heartbeat ─────────────────────────────────────────────────────────────

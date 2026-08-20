@@ -10,6 +10,8 @@ from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN, LOGGER, STORAGE_KEY_DEVICE, STORAGE_VERSION
 
+_STORAGE_KEY_TOKEN = f"{DOMAIN}_device_token"
+
 
 async def _get_or_create_keypair(hass: HomeAssistant) -> tuple[bytes, bytes]:
     """Load or generate an Ed25519 keypair persisted in HA private storage."""
@@ -21,7 +23,6 @@ async def _get_or_create_keypair(hass: HomeAssistant) -> tuple[bytes, bytes]:
         public_key = base64.b64decode(data["public_key_b64"])
         return private_key, public_key
 
-    # Generate a new keypair
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -54,35 +55,71 @@ def _sign_challenge(private_key_bytes: bytes, challenge: str) -> str:
     return base64.b64encode(signature).decode()
 
 
+async def _get_device_token(hass: HomeAssistant, entry_id: str) -> str | None:
+    """Return the stored device token for this entry, or None."""
+    store: Store = Store(hass, STORAGE_VERSION, _STORAGE_KEY_TOKEN, private=True)
+    data = await store.async_load() or {}
+    return data.get(entry_id)
+
+
+async def save_device_token(hass: HomeAssistant, entry_id: str, token: str) -> None:
+    """Persist a device token obtained after pairing approval."""
+    store: Store = Store(hass, STORAGE_VERSION, _STORAGE_KEY_TOKEN, private=True)
+    data = await store.async_load() or {}
+    data[entry_id] = token
+    await store.async_save(data)
+
+
 async def build_device_auth(
     hass: HomeAssistant,
     entry_id: str,
     challenge_payload: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Return the device auth dict for the connect RPC, or None if unavailable.
+    """Return the device auth dict for the connect RPC.
 
-    The dict is only useful when the gateway sent a challenge event.
+    Two modes depending on whether a device token has been obtained:
+
+    *Before pairing approval* — sends only deviceId + publicKey so the
+    gateway creates a pending pairing request. No signature (the gateway
+    can't verify it before the device is registered).
+
+    *After pairing approval* — also sends the deviceToken and a signature
+    of the challenge so the gateway grants operator.read/write scopes.
     """
-    if not challenge_payload:
-        return None
-
-    challenge = challenge_payload.get("challenge")
-    if not challenge:
-        return None
-
     try:
         private_key, public_key = await _get_or_create_keypair(hass)
     except (ImportError, Exception) as err:
         LOGGER.warning("Cannot build device auth: %s", err)
         return None
 
-    signature = _sign_challenge(private_key, challenge)
     public_key_b64 = base64.b64encode(public_key).decode()
+    device_id = f"{DOMAIN}-{entry_id}"
 
+    device_token = await _get_device_token(hass, entry_id)
+
+    if device_token:
+        # Paired: include token + challenge signature to get operator scopes
+        challenge = (challenge_payload or {}).get("challenge", "")
+        signature = _sign_challenge(private_key, challenge) if challenge else None
+        payload: dict[str, Any] = {
+            "deviceId": device_id,
+            "publicKey": public_key_b64,
+            "token": device_token,
+        }
+        if signature:
+            payload["signature"] = signature
+        LOGGER.debug("Connecting with paired device token for %s", device_id)
+        return payload
+
+    # Not yet paired — send only identity so gateway creates pending request
+    LOGGER.info(
+        "OpenClaw device %s not yet paired — gateway will create a pending "
+        "pairing request. Approve it and then reload the integration.",
+        device_id,
+    )
     return {
-        "deviceId": f"{DOMAIN}-{entry_id}",
+        "deviceId": device_id,
         "publicKey": public_key_b64,
-        "signature": signature,
     }
 
 
