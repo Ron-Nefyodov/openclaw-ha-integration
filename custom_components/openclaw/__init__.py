@@ -46,6 +46,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: OpenClawConfigEntry) -> 
 
     from .const import DEFAULT_PORT
 
+    device_id = f"openclaw-{entry.entry_id}"
+
     async def _device_auth_builder(challenge_payload):
         return await build_device_auth(hass, entry.entry_id, challenge_payload)
 
@@ -80,6 +82,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: OpenClawConfigEntry) -> 
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(async_update_options))
+
+    # Notify the user if device pairing is needed to obtain operator scopes.
+    # The gateway creates a pending pairing request on connect when it sees
+    # our deviceId+publicKey for the first time; the user must approve it.
+    LOGGER.warning(
+        "OpenClaw device ID: %s — if you see 'missing scope' errors, "
+        "approve device pairing in your OpenClaw dashboard or run: "
+        "openclaw device pair list",
+        device_id,
+    )
+    hass.components.persistent_notification.async_create(
+        f"OpenClaw needs device pairing to get full access.\n\n"
+        f"**Device ID:** `{device_id}`\n\n"
+        f"Run on your OpenClaw server:\n"
+        f"```\nopenclaw device pair list\n```\n"
+        f"Then approve the pending request with the device ID above.\n\n"
+        f"After approval, reload this integration.",
+        title="OpenClaw — Approve Device Pairing",
+        notification_id=f"openclaw_pairing_{entry.entry_id}",
+    )
 
     # ── Services ──────────────────────────────────────────────────────────────
     async def _service_reconnect(call: ServiceCall) -> None:
