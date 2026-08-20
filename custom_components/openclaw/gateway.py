@@ -180,16 +180,18 @@ class OpenClawGateway:
         except asyncio.TimeoutError:
             LOGGER.debug("No connect.challenge received — proceeding without device auth")
 
-        # Build device auth by signing the challenge (grants operator scopes)
-        device_auth: dict | None = None
+        # Build device auth by signing the challenge (grants operator scopes).
+        # Returns {"device": {...}, "auth": {...}} or None.
+        device_auth_result: dict | None = None
         if challenge_payload and self._device_auth_builder:
             try:
-                device_auth = await self._device_auth_builder(challenge_payload)
-                LOGGER.debug("Device auth built: %s", device_auth)
+                device_auth_result = await self._device_auth_builder(challenge_payload)
+                LOGGER.debug("Device auth built: id=%s",
+                             (device_auth_result or {}).get("device", {}).get("id", "?")[:16])
             except Exception as err:
                 LOGGER.warning("Device auth build failed (no scope upgrade): %s", err)
 
-        connect_params = self._build_connect_params(challenge_payload, device_auth)
+        connect_params = self._build_connect_params(challenge_payload, device_auth_result)
 
         # Start the real listener BEFORE the connect RPC so it can dispatch the response.
         # Without this, _raw_call's future would never be resolved.
@@ -211,7 +213,7 @@ class OpenClawGateway:
         LOGGER.info("Connected to OpenClaw gateway at %s", self._url)
 
     def _build_connect_params(
-        self, challenge: dict | None, device_auth: dict | None
+        self, challenge: dict | None, device_auth_result: dict | None
     ) -> dict[str, Any]:
         params: dict[str, Any] = {
             "minProtocol": PROTOCOL_MIN_VERSION,
@@ -224,10 +226,17 @@ class OpenClawGateway:
                 "mode": CLIENT_MODE,
             },
         }
-        if device_auth:
-            # Device auth takes precedence — sending both token+device causes
-            # the gateway to use the token path and skip the pairing flow.
-            params["device"] = device_auth
+        if device_auth_result:
+            # Device auth flow (pairing / post-pairing).
+            # The gateway requires:
+            #   - "device": the auth payload with signature
+            #   - "role" + "scopes": what role/scopes we request (used in payload verification)
+            #   - "auth": token for gateway authorization (gateway token or device token)
+            params["role"] = DEVICE_ROLE
+            params["scopes"] = sorted(DEVICE_SCOPES)
+            params["device"] = device_auth_result["device"]
+            if device_auth_result.get("auth"):
+                params["auth"] = device_auth_result["auth"]
         elif self._token:
             params["auth"] = {"token": self._token}
         return params

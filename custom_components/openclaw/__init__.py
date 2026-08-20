@@ -46,8 +46,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: OpenClawConfigEntry) -> 
 
     from .const import DEFAULT_PORT
 
+    gateway_token = entry.data.get(CONF_TOKEN, "")
+
     async def _device_auth_builder(challenge_payload):
-        return await build_device_auth(hass, entry.entry_id, challenge_payload)
+        return await build_device_auth(
+            hass, entry.entry_id, challenge_payload, gateway_token=gateway_token
+        )
 
     gateway = OpenClawGateway(
         host=entry.data[CONF_HOST],
