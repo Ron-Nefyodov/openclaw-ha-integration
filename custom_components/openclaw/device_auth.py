@@ -106,10 +106,10 @@ async def build_device_auth(
     public_key_b64 = base64.b64encode(public_key).decode()
 
     nonce = (challenge_payload or {}).get("challenge") or str(uuid.uuid4())
-    signed_at = datetime.now(timezone.utc).isoformat()
+    signed_at = int(datetime.now(timezone.utc).timestamp() * 1000)  # Unix ms
 
-    # Sign nonce + signedAt (the standard challenge-response payload)
-    signature = _sign(private_key, nonce + signed_at)
+    # Sign nonce + str(signedAt)
+    signature = _sign(private_key, nonce + str(signed_at))
 
     payload: dict[str, Any] = {
         "id": device_id,
