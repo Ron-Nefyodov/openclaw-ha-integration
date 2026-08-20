@@ -25,10 +25,7 @@ async def async_setup_entry(
     async_add_entities([OpenClawConversationEntity(config_entry)])
 
 
-class OpenClawConversationEntity(
-    conversation.ConversationEntity,
-    conversation.AbstractConversationAgent,
-):
+class OpenClawConversationEntity(conversation.ConversationEntity):
     """OpenClaw conversation agent."""
 
     _attr_has_entity_name = True
