@@ -382,7 +382,7 @@ class OpenClawGateway:
         try:
             result = await self.call(
                 "sessions.create",
-                {"key": default_key, "title": "Home Assistant"},
+                {"key": default_key},
             )
             key = result.get("sessionKey") or result.get("key") or default_key
             LOGGER.debug("Created OpenClaw session: %s", key)
@@ -403,38 +403,28 @@ class OpenClawGateway:
         loop = asyncio.get_event_loop()
         response_future: asyncio.Future[str] = loop.create_future()
 
-        LOGGER.warning("send_message: session_key=%r, text=%r", session_key, text[:80])
+        # Subscribe first to get the gateway-normalized key.
+        # The gateway expands short keys: "homeassistant" → "agent:main:homeassistant".
+        # Events carry the expanded key, so we must compare against it.
+        normalized_key = session_key
+        try:
+            sub_result = await self.call("sessions.messages.subscribe", {"key": session_key})
+            normalized_key = sub_result.get("key") or session_key
+            LOGGER.debug("sessions.messages.subscribe ok: normalized_key=%r", normalized_key)
+        except OpenClawError as err:
+            LOGGER.warning("sessions.messages.subscribe failed (non-fatal): %s", err)
 
         def on_event(frame: dict) -> None:
-            evt = frame.get("event", "")
-            payload = frame.get("payload", {})
-            # Log ALL events so we can see what arrives
-            LOGGER.warning(
-                "send_message on_event: event=%r sessionKey=%r keys=%s",
-                evt,
-                payload.get("sessionKey") if isinstance(payload, dict) else "?",
-                list(payload.keys()) if isinstance(payload, dict) else type(payload),
-            )
             if response_future.done():
                 return
-            if evt != "session.message":
+            if frame.get("event") != "session.message":
                 return
-            if payload.get("sessionKey") != session_key:
-                LOGGER.warning(
-                    "send_message: session.message sessionKey mismatch: got=%r want=%r",
-                    payload.get("sessionKey"), session_key,
-                )
+            payload = frame.get("payload", {})
+            if payload.get("sessionKey") != normalized_key:
                 return
             msg = payload.get("message")
-            LOGGER.warning(
-                "send_message: session.message msg type=%s keys=%s",
-                type(msg).__name__,
-                list(msg.keys()) if isinstance(msg, dict) else "n/a",
-            )
             if not isinstance(msg, dict):
-                LOGGER.warning("send_message: message is not a dict — full payload: %s", payload)
                 return
-            LOGGER.warning("send_message: msg.role=%r", msg.get("role"))
             if msg.get("role") != "assistant":
                 return
             # content may be a string or a list of content blocks
@@ -444,36 +434,21 @@ class OpenClawGateway:
                     block.get("text", "") if isinstance(block, dict) else str(block)
                     for block in content
                 )
-            LOGGER.warning("send_message: resolved content=%r", str(content)[:200])
             response_future.set_result(str(content))
-
-        # Subscribe before sending so we don't miss the event.
-        try:
-            sub_result = await self.call("sessions.messages.subscribe", {"key": session_key})
-            LOGGER.warning("send_message: sessions.messages.subscribe ok: %s", sub_result)
-        except OpenClawError as err:
-            LOGGER.warning("send_message: sessions.messages.subscribe failed: %s", err)
 
         remove = self.add_event_listener(on_event)
         try:
-            idempotency_key = str(uuid.uuid4())
-            LOGGER.warning(
-                "send_message: calling agent RPC sessionKey=%r idempotencyKey=%s",
-                session_key, idempotency_key,
-            )
-            agent_result = await self.call(
+            await self.call(
                 "agent",
                 {
                     "message": text,
                     "sessionKey": session_key,
-                    "idempotencyKey": idempotency_key,
+                    "idempotencyKey": str(uuid.uuid4()),
                 },
                 timeout=RESPONSE_TIMEOUT,
             )
-            LOGGER.warning("send_message: agent RPC result: %s", agent_result)
             return await asyncio.wait_for(response_future, timeout=RESPONSE_TIMEOUT)
         except asyncio.TimeoutError as err:
-            LOGGER.warning("send_message: timed out waiting for session.message event")
             raise OpenClawTimeoutError(
                 "No response from OpenClaw within the timeout period"
             ) from err
