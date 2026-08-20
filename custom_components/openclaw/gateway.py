@@ -184,7 +184,8 @@ class OpenClawGateway:
         self._listen_task = asyncio.get_event_loop().create_task(self._listen())
 
         try:
-            await self._raw_call("connect", connect_params)
+            result = await self._raw_call("connect", connect_params)
+            LOGGER.debug("Gateway connect response: %s", result)
         except OpenClawAuthError:
             raise
         except Exception as err:
@@ -206,11 +207,6 @@ class OpenClawGateway:
                 "platform": CLIENT_PLATFORM,
                 "mode": CLIENT_MODE,
             },
-            "caps": [],
-            "locale": "en-US",
-            "userAgent": f"HomeAssistant-OpenClaw/{CLIENT_VERSION}",
-            "role": DEVICE_ROLE,
-            "scopes": DEVICE_SCOPES,
         }
         if self._token:
             params["auth"] = {"token": self._token}
