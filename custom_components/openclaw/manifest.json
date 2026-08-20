@@ -8,6 +8,6 @@
   "documentation": "https://github.com/Ron-Nefyodov/openclaw-ha-integration",
   "integration_type": "service",
   "iot_class": "local_push",
-  "requirements": [],
-  "version": "1.0.0"
+  "requirements": ["cryptography>=42.0.0"],
+  "version": "1.1.0"
 }

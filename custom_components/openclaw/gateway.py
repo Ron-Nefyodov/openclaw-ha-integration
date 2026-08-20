@@ -11,11 +11,19 @@ import uuid
 import aiohttp
 
 from .const import (
-    GATEWAY_CLIENT_ID,
-    GATEWAY_CLIENT_MODE,
-    GATEWAY_CLIENT_VERSION,
-    GATEWAY_PROTOCOL_VERSION,
+    CLIENT_DISPLAY_NAME,
+    CLIENT_ID,
+    CLIENT_MODE,
+    CLIENT_PLATFORM,
+    CLIENT_VERSION,
+    DEVICE_ROLE,
+    DEVICE_SCOPES,
+    HEARTBEAT_INTERVAL,
     LOGGER,
+    PROTOCOL_MAX_VERSION,
+    PROTOCOL_MIN_VERSION,
+    RECONNECT_DELAY,
+    REQUEST_TIMEOUT,
     RESPONSE_TIMEOUT,
 )
 
@@ -36,176 +44,223 @@ class OpenClawTimeoutError(OpenClawError):
     """Raised when waiting for a response times out."""
 
 
+ConnectedCallback = Callable[[], None]
+DisconnectedCallback = Callable[[], None]
+EventCallback = Callable[[dict], None]
+
+
 class OpenClawGateway:
-    """WebSocket client for the OpenClaw Gateway."""
+    """Persistent WebSocket client for the OpenClaw Gateway.
+
+    Maintains an auto-reconnecting connection with a heartbeat.
+    """
 
     def __init__(
         self,
-        url: str,
+        host: str,
+        port: int,
         token: str,
         session: aiohttp.ClientSession,
+        ssl: bool = False,
+        device_auth: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the gateway client."""
-        self._url = url
+        scheme = "wss" if ssl else "ws"
+        self._url = f"{scheme}://{host}:{port}"
         self._token = token
         self._session = session
+        self._device_auth = device_auth  # Ed25519 device auth dict or None
+
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._pending: dict[str, asyncio.Future[Any]] = {}
-        self._event_listeners: list[Callable[[dict], None]] = []
-        self._listen_task: asyncio.Task[None] | None = None
+        self._event_listeners: list[EventCallback] = []
+        self._on_connected: list[ConnectedCallback] = []
+        self._on_disconnected: list[DisconnectedCallback] = []
 
-    async def connect(self) -> None:
-        """Connect to the Gateway and complete the authentication handshake."""
+        self._listen_task: asyncio.Task | None = None
+        self._heartbeat_task: asyncio.Task | None = None
+        self._reconnect_task: asyncio.Task | None = None
+
+        self._connected = False
+        self._should_run = False
+
+    # ── Public state ──────────────────────────────────────────────────────────
+
+    @property
+    def connected(self) -> bool:
+        """Return True when the WS handshake is complete."""
+        return self._connected
+
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    async def start(self) -> None:
+        """Start the connection manager (non-blocking)."""
+        self._should_run = True
+        self._reconnect_task = asyncio.get_event_loop().create_task(
+            self._connect_loop()
+        )
+
+    async def stop(self) -> None:
+        """Disconnect and stop all background tasks."""
+        self._should_run = False
+        for task in (self._reconnect_task, self._listen_task, self._heartbeat_task):
+            if task and not task.done():
+                task.cancel()
+        self._reconnect_task = self._listen_task = self._heartbeat_task = None
+        if self._ws and not self._ws.closed:
+            await self._ws.close()
+        self._ws = None
+        self._connected = False
+        for fut in self._pending.values():
+            if not fut.done():
+                fut.cancel()
+        self._pending.clear()
+
+    # ── Connection loop ───────────────────────────────────────────────────────
+
+    async def _connect_loop(self) -> None:
+        while self._should_run:
+            try:
+                await self._connect_once()
+                # _listen runs until the connection drops
+                await self._listen()
+            except asyncio.CancelledError:
+                return
+            except Exception as err:
+                LOGGER.warning("OpenClaw connection error: %s", err)
+
+            if not self._should_run:
+                return
+
+            self._connected = False
+            self._notify_disconnected()
+
+            # Cancel pending futures so callers don't hang during reconnect
+            for fut in list(self._pending.values()):
+                if not fut.done():
+                    fut.cancel()
+            self._pending.clear()
+
+            LOGGER.info(
+                "OpenClaw reconnecting in %s seconds…", RECONNECT_DELAY
+            )
+            await asyncio.sleep(RECONNECT_DELAY)
+
+    async def _connect_once(self) -> None:
+        """Open the WebSocket and complete the handshake."""
         try:
             self._ws = await self._session.ws_connect(
                 self._url,
-                heartbeat=30.0,
                 timeout=aiohttp.ClientTimeout(total=15),
             )
-        except aiohttp.ClientError as err:
-            raise OpenClawConnectionError(f"Cannot reach OpenClaw gateway: {err}") from err
+        except (aiohttp.ClientError, OSError) as err:
+            raise OpenClawConnectionError(
+                f"Cannot reach OpenClaw gateway at {self._url}: {err}"
+            ) from err
 
-        # Wait for the challenge event
+        # The gateway always sends a connect.challenge event first.
+        # We wait up to 10 s; some older builds may skip it (legacy fallback).
+        challenge_payload: dict | None = None
         try:
             raw = await asyncio.wait_for(self._ws.receive(), timeout=10.0)
-        except asyncio.TimeoutError as err:
-            raise OpenClawConnectionError("Gateway did not send a challenge") from err
+            if raw.type == aiohttp.WSMsgType.TEXT:
+                frame = json.loads(raw.data)
+                if frame.get("event") == "connect.challenge":
+                    challenge_payload = frame.get("payload", {})
+                else:
+                    # Not a challenge — dispatch as a normal frame and proceed
+                    self._dispatch(frame)
+        except asyncio.TimeoutError:
+            LOGGER.debug("No connect.challenge received — proceeding without device auth")
 
-        if raw.type != aiohttp.WSMsgType.TEXT:
-            raise OpenClawConnectionError("Unexpected message type from gateway")
+        connect_params = self._build_connect_params(challenge_payload)
 
-        challenge = json.loads(raw.data)
-        if challenge.get("event") != "connect.challenge":
-            raise OpenClawConnectionError(
-                f"Expected connect.challenge, got {challenge.get('event')}"
-            )
-
-        # Start the listener before the connect RPC so we can receive the response
-        self._listen_task = asyncio.get_event_loop().create_task(self._listen())
+        # Start the listener BEFORE the connect RPC so we can receive the response
+        self._listen_task = asyncio.get_event_loop().create_task(
+            self._noop_listen_placeholder()
+        )
 
         try:
-            await self._call(
-                "connect",
-                {
-                    "minProtocol": GATEWAY_PROTOCOL_VERSION,
-                    "maxProtocol": GATEWAY_PROTOCOL_VERSION,
-                    "client": {
-                        # client.id and client.mode are closed enums validated by the gateway.
-                        # "cli" / "cli" is the correct pairing for a non-UI operator client.
-                        "id": GATEWAY_CLIENT_ID,    # "cli"
-                        "version": GATEWAY_CLIENT_VERSION,
-                        "platform": "linux",
-                        "mode": GATEWAY_CLIENT_MODE,  # "cli"
-                    },
-                    "role": "operator",
-                    "scopes": ["operator.read", "operator.write"],
-                    "auth": {"token": self._token} if self._token else None,
-                },
-            )
+            await self._raw_call("connect", connect_params)
         except OpenClawAuthError:
             raise
         except Exception as err:
             raise OpenClawConnectionError(f"Gateway handshake failed: {err}") from err
 
-        # Subscribe to receive session events
-        await self._call("watch.subscribe", {})
-        LOGGER.debug("Connected to OpenClaw gateway at %s", self._url)
+        self._connected = True
+        self._start_heartbeat()
+        self._notify_connected()
+        LOGGER.info("Connected to OpenClaw gateway at %s", self._url)
 
-    async def ensure_session(self, session_key: str = "") -> str:
-        """Return session_key as-is if provided, or create/reuse a 'homeassistant' session.
+    def _build_connect_params(self, challenge: dict | None) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "minProtocol": PROTOCOL_MIN_VERSION,
+            "maxProtocol": PROTOCOL_MAX_VERSION,
+            "client": {
+                "id": CLIENT_ID,
+                "displayName": CLIENT_DISPLAY_NAME,
+                "version": CLIENT_VERSION,
+                "platform": CLIENT_PLATFORM,
+                "mode": CLIENT_MODE,
+            },
+            "caps": [],
+            "locale": "en-US",
+            "userAgent": f"HomeAssistant-OpenClaw/{CLIENT_VERSION}",
+            "role": DEVICE_ROLE,
+            "scopes": DEVICE_SCOPES,
+        }
+        if self._token:
+            params["auth"] = {"token": self._token}
+        if challenge and self._device_auth:
+            params["device"] = self._device_auth
+        return params
 
-        When no session key is configured, we look for an existing session whose
-        key starts with 'homeassistant' and reuse it, or create a new one.
-        """
-        if session_key:
-            return session_key
+    # ── Heartbeat ─────────────────────────────────────────────────────────────
 
-        default_key = "homeassistant"
-
-        try:
-            result = await self._call("chats.list", {})
-            chats = result.get("chats") or result.get("items") or []
-            for chat in chats:
-                key = chat.get("sessionKey") or chat.get("key") or ""
-                if key.startswith(default_key):
-                    LOGGER.debug("Reusing existing OpenClaw session: %s", key)
-                    return key
-        except OpenClawError:
-            pass
-
-        # No existing session found — create one
-        try:
-            result = await self._call(
-                "sessions.create",
-                {"key": default_key, "title": "Home Assistant"},
-            )
-            key = result.get("sessionKey") or result.get("key") or default_key
-            LOGGER.debug("Created new OpenClaw session: %s", key)
-            return key
-        except OpenClawError:
-            # Fall back to the plain key and let chat.send handle it
-            LOGGER.warning(
-                "Could not create session — using key '%s' directly", default_key
-            )
-            return default_key
-
-    async def disconnect(self) -> None:
-        """Disconnect from the gateway."""
-        if self._listen_task:
-            self._listen_task.cancel()
-            self._listen_task = None
-        if self._ws and not self._ws.closed:
-            await self._ws.close()
-        self._ws = None
-        # Cancel any pending futures
-        for fut in self._pending.values():
-            if not fut.done():
-                fut.cancel()
-        self._pending.clear()
-
-    async def _call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        """Send an RPC request and await the response."""
-        if self._ws is None or self._ws.closed:
-            raise OpenClawConnectionError("Not connected to gateway")
-
-        req_id = str(uuid.uuid4())
-        loop = asyncio.get_event_loop()
-        future: asyncio.Future[dict[str, Any]] = loop.create_future()
-        self._pending[req_id] = future
-
-        await self._ws.send_str(
-            json.dumps({"type": "req", "id": req_id, "method": method, "params": params})
+    def _start_heartbeat(self) -> None:
+        if self._heartbeat_task and not self._heartbeat_task.done():
+            self._heartbeat_task.cancel()
+        self._heartbeat_task = asyncio.get_event_loop().create_task(
+            self._heartbeat_loop()
         )
 
+    async def _heartbeat_loop(self) -> None:
         try:
-            return await asyncio.wait_for(future, timeout=15.0)
-        except asyncio.TimeoutError as err:
-            self._pending.pop(req_id, None)
-            raise OpenClawTimeoutError(f"RPC call '{method}' timed out") from err
+            while True:
+                await asyncio.sleep(HEARTBEAT_INTERVAL)
+                if self._ws and not self._ws.closed:
+                    await self._ws.ping()
+        except asyncio.CancelledError:
+            pass
+        except Exception as err:
+            LOGGER.debug("Heartbeat error: %s", err)
+
+    # ── Listener ──────────────────────────────────────────────────────────────
+
+    async def _noop_listen_placeholder(self) -> None:
+        """Replaced immediately by _listen in _connect_loop."""
 
     async def _listen(self) -> None:
-        """Receive and dispatch messages from the gateway."""
-        assert self._ws is not None
+        """Receive and dispatch messages until the socket closes."""
+        if self._ws is None:
+            return
         try:
             async for msg in self._ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     self._dispatch(json.loads(msg.data))
-                elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
-                    LOGGER.warning("OpenClaw gateway connection closed: %s", msg)
+                elif msg.type in (
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.ERROR,
+                    aiohttp.WSMsgType.CLOSED,
+                ):
+                    LOGGER.info("OpenClaw WS closed: %s", msg)
                     break
         except asyncio.CancelledError:
             pass
         except Exception as err:
-            LOGGER.error("OpenClaw gateway listener error: %s", err)
-
-        # Cancel all waiting futures so callers don't hang
-        for fut in self._pending.values():
-            if not fut.done():
-                fut.cancel()
-        self._pending.clear()
+            LOGGER.error("OpenClaw listener error: %s", err)
 
     def _dispatch(self, frame: dict[str, Any]) -> None:
-        """Route a received frame to pending RPC futures or event listeners."""
         frame_type = frame.get("type")
 
         if frame_type == "res":
@@ -224,32 +279,84 @@ class OpenClawGateway:
                         future.set_exception(OpenClawError(f"{code}: {msg}"))
 
         elif frame_type == "event":
-            LOGGER.debug("Gateway event: %s", frame.get("event"))
+            event_name = frame.get("event", "")
+            LOGGER.debug("Gateway event: %s", event_name)
             for listener in list(self._event_listeners):
                 try:
                     listener(frame)
                 except Exception as err:
                     LOGGER.error("Event listener error: %s", err)
 
-    def add_event_listener(self, listener: Callable[[dict], None]) -> Callable[[], None]:
-        """Register an event listener. Returns a callable that removes it."""
-        self._event_listeners.append(listener)
+    # ── RPC ───────────────────────────────────────────────────────────────────
 
-        def remove() -> None:
-            try:
-                self._event_listeners.remove(listener)
-            except ValueError:
-                pass
+    async def _raw_call(
+        self, method: str, params: dict[str, Any], timeout: float = REQUEST_TIMEOUT
+    ) -> dict[str, Any]:
+        """Send an RPC request and await the response (no reconnect guard)."""
+        if self._ws is None or self._ws.closed:
+            raise OpenClawConnectionError("Not connected to gateway")
 
-        return remove
+        req_id = str(uuid.uuid4())
+        future: asyncio.Future[dict[str, Any]] = asyncio.get_event_loop().create_future()
+        self._pending[req_id] = future
+
+        await self._ws.send_str(
+            json.dumps({"type": "req", "id": req_id, "method": method, "params": params})
+        )
+
+        try:
+            return await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError as err:
+            self._pending.pop(req_id, None)
+            raise OpenClawTimeoutError(f"RPC call '{method}' timed out") from err
+
+    async def call(
+        self, method: str, params: dict[str, Any], timeout: float = REQUEST_TIMEOUT
+    ) -> dict[str, Any]:
+        """Send an RPC request — raises if not connected."""
+        if not self._connected:
+            raise OpenClawConnectionError("Gateway is not connected")
+        return await self._raw_call(method, params, timeout)
+
+    # ── Session helpers ───────────────────────────────────────────────────────
+
+    async def ensure_session(self, session_key: str = "") -> str:
+        """Return session_key if given, else find/create the 'homeassistant' session."""
+        if session_key:
+            return session_key
+
+        default_key = "homeassistant"
+
+        try:
+            result = await self.call("sessions.list", {})
+            sessions = result.get("sessions") or result.get("items") or []
+            for s in sessions:
+                key = s.get("sessionKey") or s.get("key") or ""
+                if key.startswith(default_key):
+                    LOGGER.debug("Reusing existing OpenClaw session: %s", key)
+                    return key
+        except OpenClawError:
+            pass
+
+        try:
+            result = await self.call(
+                "sessions.create",
+                {"key": default_key, "title": "Home Assistant"},
+            )
+            key = result.get("sessionKey") or result.get("key") or default_key
+            LOGGER.debug("Created OpenClaw session: %s", key)
+            return key
+        except OpenClawError:
+            LOGGER.warning("Could not create session, using key '%s' directly", default_key)
+            return default_key
+
+    # ── Sending messages ──────────────────────────────────────────────────────
 
     async def send_message(self, session_key: str, text: str) -> str:
-        """Send a chat message and wait for the assistant's cumulative response.
+        """Send a message to the agent and wait for the cumulative response.
 
-        OpenClaw protocol v4 sends two kinds of updates:
-        - `chat` events with deltaText (streaming chunks) — ignored here
-        - `session.message` events with a cumulative `message` snapshot once the
-          run completes — this is what we resolve on.
+        Uses the 'agent' RPC method (not 'chat.send') and waits for a
+        session.message event carrying the full assistant reply.
         """
         loop = asyncio.get_event_loop()
         response_future: asyncio.Future[str] = loop.create_future()
@@ -260,8 +367,6 @@ class OpenClawGateway:
                 frame.get("event") == "session.message"
                 and payload.get("sessionKey") == session_key
                 and payload.get("role") == "assistant"
-                # `message` is the cumulative snapshot; fall back to `text` for
-                # older gateway versions that used that field name.
                 and ("message" in payload or "text" in payload)
                 and not response_future.done()
             ):
@@ -269,17 +374,17 @@ class OpenClawGateway:
                     payload.get("message") or payload.get("text", "")
                 )
 
-        # Register listener BEFORE sending to avoid race conditions
         remove = self.add_event_listener(on_event)
 
         try:
-            await self._call(
-                "chat.send",
+            await self.call(
+                "agent",
                 {
+                    "message": text,
                     "sessionKey": session_key,
-                    "text": text,
-                    "queueMode": "steer",
+                    "idempotencyKey": str(uuid.uuid4()),
                 },
+                timeout=RESPONSE_TIMEOUT,
             )
             return await asyncio.wait_for(response_future, timeout=RESPONSE_TIMEOUT)
         except asyncio.TimeoutError as err:
@@ -288,3 +393,49 @@ class OpenClawGateway:
             ) from err
         finally:
             remove()
+
+    # ── Health / status ───────────────────────────────────────────────────────
+
+    async def get_health(self) -> dict[str, Any]:
+        """Return the gateway health payload."""
+        return await self.call("health", {})
+
+    async def get_status(self) -> dict[str, Any]:
+        """Return the gateway status payload (uptime, clients, etc.)."""
+        return await self.call("status", {})
+
+    # ── Event registration ────────────────────────────────────────────────────
+
+    def add_event_listener(self, listener: EventCallback) -> Callable[[], None]:
+        """Register a listener. Returns a remove callable."""
+        self._event_listeners.append(listener)
+
+        def remove() -> None:
+            try:
+                self._event_listeners.remove(listener)
+            except ValueError:
+                pass
+
+        return remove
+
+    def add_connected_listener(self, cb: ConnectedCallback) -> Callable[[], None]:
+        self._on_connected.append(cb)
+        return lambda: self._on_connected.remove(cb) if cb in self._on_connected else None
+
+    def add_disconnected_listener(self, cb: DisconnectedCallback) -> Callable[[], None]:
+        self._on_disconnected.append(cb)
+        return lambda: self._on_disconnected.remove(cb) if cb in self._on_disconnected else None
+
+    def _notify_connected(self) -> None:
+        for cb in list(self._on_connected):
+            try:
+                cb()
+            except Exception as err:
+                LOGGER.error("Connected callback error: %s", err)
+
+    def _notify_disconnected(self) -> None:
+        for cb in list(self._on_disconnected):
+            try:
+                cb()
+            except Exception as err:
+                LOGGER.error("Disconnected callback error: %s", err)

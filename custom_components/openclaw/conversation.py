@@ -35,7 +35,6 @@ class OpenClawConversationEntity(
     _attr_name = None
 
     def __init__(self, entry: OpenClawConfigEntry) -> None:
-        """Initialize the entity."""
         self.entry = entry
         self._attr_unique_id = entry.entry_id
         from homeassistant.helpers import device_registry as dr
@@ -50,7 +49,6 @@ class OpenClawConversationEntity(
 
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
-        """Return a list of supported languages."""
         return MATCH_ALL
 
     async def _async_handle_message(
@@ -58,7 +56,7 @@ class OpenClawConversationEntity(
         user_input: conversation.ConversationInput,
         chat_log: conversation.ChatLog,
     ) -> conversation.ConversationResult:
-        """Forward the user message to OpenClaw and return the response."""
+        """Forward user message to OpenClaw and return the response."""
         options = self.entry.options
         system_prompt = options.get(CONF_SYSTEM_PROMPT, "")
 
@@ -67,8 +65,6 @@ class OpenClawConversationEntity(
             text = f"{system_prompt}\n\n{text}"
 
         gateway = self.entry.runtime_data
-
-        # Resolve session — uses configured key or auto-creates a 'homeassistant' session
         session_key = await gateway.ensure_session(options.get(CONF_SESSION_KEY, ""))
 
         try:

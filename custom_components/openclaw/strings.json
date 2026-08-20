@@ -3,41 +3,49 @@
     "step": {
       "user": {
         "title": "Connect to OpenClaw",
-        "description": "Enter your OpenClaw gateway details. Run `openclaw gateway status` to find the address and token.",
+        "description": "Enter your OpenClaw gateway details. Run `openclaw gateway status` to find the host and token.",
         "data": {
-          "gateway_url": "Gateway URL",
+          "host": "Gateway host",
+          "port": "Port",
           "token": "Auth token",
-          "session_key": "Session key"
+          "ssl": "Use SSL (wss://)",
+          "session_key": "Session key (optional)"
         },
         "data_description": {
-          "gateway_url": "WebSocket URL of your OpenClaw gateway — e.g. ws://192.168.1.50:18789",
-          "token": "Auth token from your gateway config (gateway.auth.token). Leave blank if auth is disabled.",
-          "session_key": "Leave blank to auto-create a dedicated 'homeassistant' session, or paste a session key from the OpenClaw Control UI"
+          "host": "IP address or hostname of your OpenClaw gateway — e.g. 192.168.1.50",
+          "port": "WebSocket port (default 18789)",
+          "token": "Auth token from your gateway config. Leave blank if auth is disabled.",
+          "ssl": "Enable for HTTPS/WSS gateways.",
+          "session_key": "Leave blank to auto-create a 'homeassistant' session, or paste an existing session key."
         }
       },
       "reconfigure": {
-        "title": "Reconfigure OpenClaw connection",
-        "description": "Update the gateway URL, auth token, or session key.",
+        "title": "Reconfigure OpenClaw",
+        "description": "Update the gateway host, port, token, or session key.",
         "data": {
-          "gateway_url": "Gateway URL",
+          "host": "Gateway host",
+          "port": "Port",
           "token": "Auth token",
-          "session_key": "Session key"
+          "ssl": "Use SSL (wss://)",
+          "session_key": "Session key (optional)"
         },
         "data_description": {
-          "gateway_url": "WebSocket URL of your OpenClaw gateway — e.g. ws://192.168.1.50:18789",
+          "host": "IP address or hostname of your OpenClaw gateway",
+          "port": "WebSocket port (default 18789)",
           "token": "Auth token from your gateway config. Leave blank if auth is disabled.",
-          "session_key": "The OpenClaw session key that Home Assistant should talk to"
+          "ssl": "Enable for HTTPS/WSS gateways.",
+          "session_key": "The session key Home Assistant should route messages to."
         }
       }
     },
     "error": {
-      "cannot_connect": "Cannot connect to the OpenClaw gateway — check the URL and make sure OpenClaw is running",
-      "invalid_auth": "Invalid auth token",
-      "unknown": "Unexpected error"
+      "cannot_connect": "Cannot connect to the OpenClaw gateway — check the host/port and ensure OpenClaw is running.",
+      "invalid_auth": "Invalid auth token.",
+      "unknown": "Unexpected error — check the Home Assistant logs."
     },
     "abort": {
-      "already_configured": "This OpenClaw gateway is already configured",
-      "reconfigure_successful": "Gateway connection updated successfully"
+      "already_configured": "This OpenClaw gateway is already configured.",
+      "reconfigure_successful": "Gateway connection updated successfully."
     }
   },
   "options": {
@@ -49,8 +57,24 @@
           "system_prompt": "System prompt prefix (optional)"
         },
         "data_description": {
-          "session_key": "The OpenClaw session key to route messages to. Change this to switch sessions without reconnecting.",
+          "session_key": "The OpenClaw session key to route messages to. Leave blank to use the auto-created 'homeassistant' session.",
           "system_prompt": "Text prepended to every message sent to OpenClaw. Leave blank to send the user message as-is."
+        }
+      }
+    }
+  },
+  "services": {
+    "reconnect": {
+      "name": "Reconnect",
+      "description": "Force a reconnect to the OpenClaw gateway."
+    },
+    "set_session": {
+      "name": "Set session",
+      "description": "Change the active OpenClaw session key at runtime.",
+      "fields": {
+        "session_key": {
+          "name": "Session key",
+          "description": "The session key to switch to."
         }
       }
     }
