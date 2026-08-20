@@ -53,6 +53,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: OpenClawConfigEntry) -> 
             hass, entry.entry_id, challenge_payload, gateway_token=gateway_token
         )
 
+    from .device_auth import save_device_token as _save_device_token
+
+    async def _save_dt(token: str) -> None:
+        await _save_device_token(hass, entry.entry_id, token)
+
     gateway = OpenClawGateway(
         host=entry.data[CONF_HOST],
         port=entry.data.get(CONF_PORT, DEFAULT_PORT),
@@ -60,6 +65,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: OpenClawConfigEntry) -> 
         session=session,
         ssl=entry.data.get(CONF_SSL, False),
         device_auth_builder=_device_auth_builder,
+        save_device_token_callback=_save_dt,
     )
 
     try:

@@ -63,18 +63,24 @@ class OpenClawGateway:
         session: aiohttp.ClientSession,
         ssl: bool = False,
         device_auth_builder: Any | None = None,
+        save_device_token_callback: Any | None = None,
     ) -> None:
         """Initialize the gateway client.
 
         device_auth_builder: async callable(challenge_payload) -> dict | None
         Used to sign the connect challenge with an Ed25519 keypair so the
         gateway grants operator.read / operator.write scopes.
+
+        save_device_token_callback: async callable(token: str) -> None
+        Called when the gateway returns a new deviceToken after pairing approval.
         """
         scheme = "wss" if ssl else "ws"
         self._url = f"{scheme}://{host}:{port}"
         self._token = token
         self._session = session
         self._device_auth_builder = device_auth_builder
+
+        self._save_device_token_callback = save_device_token_callback
 
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._pending: dict[str, asyncio.Future[Any]] = {}
@@ -206,6 +212,18 @@ class OpenClawGateway:
             raise
         except Exception as err:
             raise OpenClawConnectionError(f"Gateway handshake failed: {err}") from err
+
+        # Save device token if gateway granted one (happens after pairing approval).
+        new_device_token = (
+            (result.get("auth") or {}).get("deviceToken")
+            or result.get("deviceToken")
+        )
+        if new_device_token and self._save_device_token_callback:
+            try:
+                await self._save_device_token_callback(new_device_token)
+                LOGGER.info("Saved new device token from gateway")
+            except Exception as err:
+                LOGGER.warning("Failed to save device token: %s", err)
 
         self._connected = True
         self._start_heartbeat()
@@ -378,27 +396,42 @@ class OpenClawGateway:
     async def send_message(self, session_key: str, text: str) -> str:
         """Send a message to the agent and wait for the cumulative response.
 
-        Uses the 'agent' RPC method (not 'chat.send') and waits for a
-        session.message event carrying the full assistant reply.
+        The 'agent' RPC is non-blocking — it returns immediately with a runId.
+        The actual reply arrives as a 'session.message' event whose payload.message
+        is a message object with role/content fields (not a top-level role string).
         """
         loop = asyncio.get_event_loop()
         response_future: asyncio.Future[str] = loop.create_future()
 
         def on_event(frame: dict) -> None:
+            if response_future.done():
+                return
+            if frame.get("event") != "session.message":
+                return
             payload = frame.get("payload", {})
-            if (
-                frame.get("event") == "session.message"
-                and payload.get("sessionKey") == session_key
-                and payload.get("role") == "assistant"
-                and ("message" in payload or "text" in payload)
-                and not response_future.done()
-            ):
-                response_future.set_result(
-                    payload.get("message") or payload.get("text", "")
+            if payload.get("sessionKey") != session_key:
+                return
+            msg = payload.get("message")
+            if not isinstance(msg, dict):
+                return
+            if msg.get("role") != "assistant":
+                return
+            # content may be a string or a list of content blocks
+            content = msg.get("content") or msg.get("text") or ""
+            if isinstance(content, list):
+                content = "".join(
+                    block.get("text", "") if isinstance(block, dict) else str(block)
+                    for block in content
                 )
+            response_future.set_result(str(content))
+
+        # Subscribe before sending so we don't miss the event.
+        try:
+            await self.call("sessions.messages.subscribe", {"key": session_key})
+        except OpenClawError as err:
+            LOGGER.debug("sessions.messages.subscribe failed (non-fatal): %s", err)
 
         remove = self.add_event_listener(on_event)
-
         try:
             await self.call(
                 "agent",
