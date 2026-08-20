@@ -209,7 +209,7 @@ class OpenClawGateway:
             },
         }
         if self._token:
-            params["auth"] = {"mode": "token", "token": self._token}
+            params["auth"] = {"token": self._token}
         if challenge and self._device_auth:
             params["device"] = self._device_auth
         return params
