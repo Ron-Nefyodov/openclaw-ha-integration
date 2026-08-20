@@ -185,7 +185,7 @@ class OpenClawGateway:
 
         try:
             result = await self._raw_call("connect", connect_params)
-            LOGGER.debug("Gateway connect response: %s", result)
+            LOGGER.warning("Gateway connect response: %s", result)
         except OpenClawAuthError:
             raise
         except Exception as err:
@@ -207,11 +207,9 @@ class OpenClawGateway:
                 "platform": CLIENT_PLATFORM,
                 "mode": CLIENT_MODE,
             },
-            "role": DEVICE_ROLE,
-            "scopes": DEVICE_SCOPES,
         }
         if self._token:
-            params["auth"] = {"token": self._token}
+            params["auth"] = {"mode": "token", "token": self._token}
         if challenge and self._device_auth:
             params["device"] = self._device_auth
         return params

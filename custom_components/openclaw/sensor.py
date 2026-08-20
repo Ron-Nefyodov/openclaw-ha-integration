@@ -29,8 +29,10 @@ async def async_setup_entry(
     gateway = config_entry.runtime_data
 
     coordinator = OpenClawStatusCoordinator(hass, gateway, config_entry.entry_id)
-    # Schedule a background refresh — don't block setup or raise ConfigEntryNotReady
-    coordinator.async_refresh()  # fire-and-forget
+    # Schedule a background refresh without blocking setup
+    config_entry.async_create_background_task(
+        hass, coordinator.async_refresh(), "openclaw_initial_refresh"
+    )
 
     async_add_entities(
         [
