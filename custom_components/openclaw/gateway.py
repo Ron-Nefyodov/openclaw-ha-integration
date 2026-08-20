@@ -207,6 +207,8 @@ class OpenClawGateway:
                 "platform": CLIENT_PLATFORM,
                 "mode": CLIENT_MODE,
             },
+            "role": DEVICE_ROLE,
+            "scopes": DEVICE_SCOPES,
         }
         if self._token:
             params["auth"] = {"token": self._token}

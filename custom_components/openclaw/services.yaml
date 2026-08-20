@@ -1,0 +1,15 @@
+reconnect:
+  name: Reconnect
+  description: Force a reconnect to the OpenClaw gateway.
+
+set_session:
+  name: Set session
+  description: Change the active OpenClaw session key at runtime.
+  fields:
+    session_key:
+      name: Session key
+      description: The session key to switch to.
+      required: true
+      example: "homeassistant"
+      selector:
+        text:
