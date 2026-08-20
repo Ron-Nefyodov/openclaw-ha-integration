@@ -122,8 +122,10 @@ class OpenClawGateway:
         while self._should_run:
             try:
                 await self._connect_once()
-                # _listen runs until the connection drops
-                await self._listen()
+                # _listen_task is already running (started inside _connect_once).
+                # Wait for it to finish, which means the connection dropped.
+                if self._listen_task:
+                    await self._listen_task
             except asyncio.CancelledError:
                 return
             except Exception as err:
@@ -175,10 +177,11 @@ class OpenClawGateway:
 
         connect_params = self._build_connect_params(challenge_payload)
 
-        # Start the listener BEFORE the connect RPC so we can receive the response
-        self._listen_task = asyncio.get_event_loop().create_task(
-            self._noop_listen_placeholder()
-        )
+        # Start the real listener BEFORE the connect RPC so it can dispatch the response.
+        # Without this, _raw_call's future would never be resolved.
+        if self._listen_task and not self._listen_task.done():
+            self._listen_task.cancel()
+        self._listen_task = asyncio.get_event_loop().create_task(self._listen())
 
         try:
             await self._raw_call("connect", connect_params)
@@ -236,9 +239,6 @@ class OpenClawGateway:
             LOGGER.debug("Heartbeat error: %s", err)
 
     # ── Listener ──────────────────────────────────────────────────────────────
-
-    async def _noop_listen_placeholder(self) -> None:
-        """Replaced immediately by _listen in _connect_loop."""
 
     async def _listen(self) -> None:
         """Receive and dispatch messages until the socket closes."""
